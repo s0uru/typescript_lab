@@ -1,8 +1,11 @@
 body {
   margin: 0;
   padding: 0;
-  background-color: #4a3665; /* Delikatnie szare tło, żeby białe karty projektów się odcinały */
   min-height: 100vh;
+  background: linear-gradient(to right, #2f80ed, #56ccf2);
+  background-attachment: fixed;
+  color: #ffffff; 
+  font-family: 'Poppins', sans-serif;
 }
 
 #root {
@@ -10,5 +13,5 @@ body {
 }
 
 * {
-  box-sizing: border-box; /* Sprawia, że paddingi nie psują szerokości elementów */
+  box-sizing: border-box;
 }

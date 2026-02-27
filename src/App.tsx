@@ -1,12 +1,16 @@
 import { useState, useEffect } from 'react';
 import type { Project } from './types/Project';
 import { ProjectService } from './services/ProjectService';
-import './App.css'; // <--- O TYM IMPORCIE NIE MOŻEMY ZAPOMNIEĆ!
+import './App.css';
 
 function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
 
   useEffect(() => {
     setProjects(ProjectService.getAll());
@@ -27,11 +31,31 @@ function App() {
     setProjects(ProjectService.getAll());
   };
 
+  const startEditing = (project: Project) => {
+    setEditingId(project.id);
+    setEditName(project.name);
+    setEditDescription(project.description);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditName('');
+    setEditDescription('');
+  };
+
+  const handleUpdateProject = (id: string) => {
+    if (!editName.trim()) return; 
+    
+    ProjectService.update(id, { name: editName, description: editDescription });
+    
+    setEditingId(null);
+    setProjects(ProjectService.getAll());
+  };
+
   return (
     <div className="app-container">
-      <h1>Project📔Manage</h1>
+      <h1 className="app-title">PrismBoard</h1>
 
-      {/* --- FORMULARZ DODAWANIA --- */}
       <form onSubmit={handleAddProject} className="form-container">
         <input 
           placeholder="Nazwa projektu" 
@@ -52,22 +76,46 @@ function App() {
 
       <hr className="divider" />
 
-      {/* --- LISTA PROJEKTÓW --- */}
       <div>
         {projects.length === 0 ? (
           <p className="empty-state">Brak projektów. Dodaj coś, żeby zacząć!</p>
         ) : (
           projects.map(project => (
             <div key={project.id} className="project-card">
-              <h3 className="project-title">{project.name}</h3>
-              <p className="project-desc">{project.description}</p>
               
-              <button 
-                onClick={() => handleDelete(project.id)}
-                className="delete-btn"
-              >
-                Usuń
-              </button>
+              {editingId === project.id ? (
+                <div className="edit-form-inline">
+                  <input 
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="input-field"
+                  />
+                  <textarea 
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    className="textarea-field"
+                  />
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={() => handleUpdateProject(project.id)} className="submit-btn" style={{ flex: 1 }}>Zapisz</button>
+                    <button onClick={cancelEditing} className="delete-btn" style={{ flex: 1 }}>Anuluj</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <h3 className="project-title">{project.name}</h3>
+                  <p className="project-desc">{project.description}</p>
+                  
+                  <div className="card-actions">
+                    <button onClick={() => startEditing(project)} className="edit-btn">
+                      Edytuj
+                    </button>
+                    <button onClick={() => handleDelete(project.id)} className="delete-btn">
+                      Usuń
+                    </button>
+                  </div>
+                </>
+              )}
+              
             </div>
           ))
         )}
