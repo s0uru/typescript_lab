@@ -1,17 +1,2 @@
-body {
-  margin: 0;
-  padding: 0;
-  min-height: 100vh;
-  background: linear-gradient(to right, #2f80ed, #56ccf2);
-  background-attachment: fixed;
-  color: #ffffff; 
-  font-family: 'Poppins', sans-serif;
-}
-
-#root {
-  width: 100%;
-}
-
-* {
-  box-sizing: border-box;
-}
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
