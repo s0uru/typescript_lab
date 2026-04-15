@@ -1,11 +1,15 @@
+// src/App.tsx
 import { useState, useEffect } from 'react';
 import { ProjectService } from './services/ProjectService';
 import { UserService } from './services/UserService';
 import { StoryService } from './services/StoryService';
 import { TaskService } from './services/TaskService';
+import { NotificationService } from './services/NotificationService';
+
 import type { Project } from './types/Project';
 import type { Story, StoryStatus, StoryPriority } from './types/Story';
 import type { Task, TaskPriority } from './types/Task';
+import type { Notification, NotificationPriority } from './types/Notification';
 
 function App() {
   const user = UserService.getLoggedInUser();
@@ -26,6 +30,11 @@ function App() {
       localStorage.setItem('theme', 'light');
     }
   }, [darkMode]);
+
+  // STANY POWIADOMIEŃ
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [showAllNotifications, setShowAllNotifications] = useState(false);
+  const [activeDialog, setActiveDialog] = useState<Notification | null>(null);
 
   // Stany aplikacji
   const [projects, setProjects] = useState<Project[]>([]);
@@ -48,10 +57,26 @@ function App() {
   const [taskPriority, setTaskPriority] = useState<TaskPriority>('medium');
   const [taskTime, setTaskTime] = useState<number>(1);
 
+  // POMOCNICZA FUNKCJA DO POWIADOMIEŃ
+  const refreshNotifications = () => {
+    setNotifications(NotificationService.getForUser(user.id));
+  };
+
+  const sendNotification = (recipientId: string, title: string, msg: string, priority: NotificationPriority) => {
+    const note = NotificationService.create(recipientId, title, msg, priority);
+    if (recipientId === user.id) {
+      refreshNotifications();
+      if (priority === 'medium' || priority === 'high') {
+        setActiveDialog(note);
+      }
+    }
+  };
+
   useEffect(() => {
     setProjects(ProjectService.getAll());
     setActiveProjectId(ProjectService.getActiveId());
-  }, []);
+    refreshNotifications();
+  }, [user.id]);
 
   useEffect(() => {
     if (activeProjectId) setStories(StoryService.getByProject(activeProjectId));
@@ -61,11 +86,17 @@ function App() {
     if (activeStoryId) setTasks(TaskService.getByStory(activeStoryId));
   }, [activeStoryId]);
 
-  // Logika
+  // Logika Aplikacji z Powiadomieniami
   const handleAddProject = (e: React.FormEvent) => {
     e.preventDefault();
     if (!projName.trim()) return;
     ProjectService.create(projName, projDesc);
+    
+    // POWIADOMIENIE: Nowy projekt (high) dla adminów
+    allUsers.filter(u => u.role === 'admin').forEach(admin => {
+      sendNotification(admin.id, 'Nowy Projekt', `Utworzono projekt: ${projName}`, 'high');
+    });
+
     setProjName(''); setProjDesc('');
     setProjects(ProjectService.getAll());
   };
@@ -99,6 +130,13 @@ function App() {
     e.preventDefault();
     if (!taskName.trim() || !activeStoryId) return;
     TaskService.create({ name: taskName, description: taskDesc, priority: taskPriority, estimatedTime: taskTime, storyId: activeStoryId });
+    
+    // POWIADOMIENIE: Nowe zadanie (medium) dla właściciela
+    const story = stories.find(s => s.id === activeStoryId);
+    if (story) {
+      sendNotification(story.ownerId, 'Nowe zadanie', `Dodano zadanie "${taskName}" do historyjki ${story.name}`, 'medium');
+    }
+
     setTaskName(''); setTaskDesc(''); setTaskTime(1);
     setTasks(TaskService.getByStory(activeStoryId));
   };
@@ -109,9 +147,20 @@ function App() {
       status: 'doing',
       startDate: new Date().toISOString()
     });
-    const currentStory = stories.find(s => s.id === activeStoryId);
-    if (currentStory && currentStory.status === 'todo') {
-      StoryService.update(currentStory.id, { status: 'doing' });
+
+    const story = stories.find(s => s.id === activeStoryId);
+    const task = tasks.find(t => t.id === taskId);
+
+    // POWIADOMIENIE: Przypisanie do zadania (high)
+    sendNotification(userId, 'Zostałeś przypisany', `Przypisano Cię do zadania: ${task?.name}`, 'high');
+    
+    // POWIADOMIENIE: Status zadania na doing (low)
+    if (story) {
+      sendNotification(story.ownerId, 'Zadanie w toku', `Zadanie "${task?.name}" ma status DOING`, 'low');
+    }
+
+    if (story && story.status === 'todo') {
+      StoryService.update(story.id, { status: 'doing' });
       setStories(StoryService.getByProject(activeProjectId!));
     }
     setTasks(TaskService.getByStory(activeStoryId!));
@@ -123,6 +172,15 @@ function App() {
       status: 'done',
       endDate: new Date().toISOString()
     });
+
+    const story = stories.find(s => s.id === activeStoryId);
+    const task = tasks.find(t => t.id === taskId);
+    
+    // POWIADOMIENIE: Status zadania na done (medium)
+    if (story) {
+      sendNotification(story.ownerId, 'Zadanie ukończone', `Zadanie "${task?.name}" ma status DONE`, 'medium');
+    }
+
     const updatedTasks = TaskService.getByStory(activeStoryId!);
     setTasks(updatedTasks);
     if (updatedTasks.every(t => t.status === 'done')) {
@@ -130,6 +188,23 @@ function App() {
       setStories(StoryService.getByProject(activeProjectId!));
     }
     setSelectedTask(null);
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    const story = stories.find(s => s.id === activeStoryId);
+    
+    if (window.confirm(`Czy na pewno usunąć zadanie: ${task?.name}?`)) {
+      TaskService.delete(taskId);
+      
+      // POWIADOMIENIE: Usunięcie zadania (medium) dla właściciela
+      if (story) {
+        sendNotification(story.ownerId, 'Usunięto zadanie', `Zadanie "${task?.name}" zostało usunięte.`, 'medium');
+      }
+      
+      setTasks(TaskService.getByStory(activeStoryId!));
+      setSelectedTask(null);
+    }
   };
 
   const calculateHours = (start?: string, end?: string) => {
@@ -148,7 +223,7 @@ function App() {
   const btnClass = "bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl transition-colors shadow-lg shadow-blue-500/30";
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors duration-300 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors duration-300 p-4 md:p-8 relative">
       <div className="max-w-6xl mx-auto">
         
         {/* HEADER */}
@@ -159,6 +234,20 @@ function App() {
             </h1>
           </div>
           <div className="flex items-center gap-6">
+            
+            {/* IKONA POWIADOMIEŃ */}
+            <button 
+              onClick={() => setShowAllNotifications(true)}
+              className="relative p-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 rounded-xl hover:scale-105 transition-all text-xl"
+            >
+              🔔
+              {NotificationService.getUnreadCount(user.id) > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
+                  {NotificationService.getUnreadCount(user.id)}
+                </span>
+              )}
+            </button>
+
             <button 
               onClick={() => setDarkMode(!darkMode)}
               className="p-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 rounded-xl hover:scale-105 transition-all text-xl"
@@ -302,7 +391,7 @@ function App() {
               ))}
             </div>
 
-            {/* MODAL: SZCZEGÓŁY ZADANIA */}
+            {/* MODAL: SZCZEGÓŁY ZADANIA I USUWANIE */}
             {selectedTask && (
               <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-50 p-4" onClick={() => setSelectedTask(null)}>
                 <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl w-full max-w-lg border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -330,19 +419,70 @@ function App() {
                   )}
 
                   {selectedTask.status === 'doing' && (
-                    <button onClick={() => handleCompleteTask(selectedTask.id)} className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors mb-6 shadow-lg shadow-green-500/30">
+                    <button onClick={() => handleCompleteTask(selectedTask.id)} className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors mb-4 shadow-lg shadow-green-500/30">
                       Oznacz jako ZAKOŃCZONE
                     </button>
                   )}
 
+                  <button onClick={() => handleDeleteTask(selectedTask.id)} className="w-full bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-500/10 dark:hover:bg-red-500/20 font-bold py-3 rounded-xl transition-colors mb-4">
+                    Usuń zadanie
+                  </button>
+
                   <button onClick={() => setSelectedTask(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">
-                    Zamknij
+                    Zamknij widok
                   </button>
                 </div>
               </div>
             )}
           </div>
         )}
+
+        {/* MODAL WSZYSTKICH POWIADOMIEŃ */}
+        {showAllNotifications && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-50 p-4" onClick={() => setShowAllNotifications(false)}>
+            <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl w-full max-w-lg border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold">Powiadomienia</h2>
+                <button onClick={() => setShowAllNotifications(false)} className="text-slate-400 hover:text-red-500 font-bold">Zamknij</button>
+              </div>
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                {notifications.length === 0 ? <p className="text-slate-500 text-center py-4">Brak powiadomień</p> : 
+                  notifications.map(n => (
+                    <div 
+                      key={n.id} 
+                      onClick={() => { NotificationService.markAsRead(n.id); setActiveDialog(n); refreshNotifications(); }} 
+                      className={`p-4 rounded-xl border cursor-pointer transition-colors ${n.isRead ? 'opacity-60 bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700' : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'}`}
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <h4 className="font-bold">{n.title}</h4>
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${n.priority === 'high' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{n.priority}</span>
+                      </div>
+                      <p className="text-sm opacity-80">{n.message}</p>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* DIALOG POJEDYNCZEGO POWIADOMIENIA (WYSKAKUJĄCE OKNO) */}
+        {activeDialog && (
+          <div className="fixed inset-0 flex items-center justify-center z-[60] p-4 bg-slate-900/60 backdrop-blur-sm">
+            <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl max-w-sm w-full shadow-2xl border-t-8 border-blue-600">
+              <span className="text-[10px] font-black uppercase text-blue-500 tracking-widest mb-2 block">{activeDialog.priority} Priority</span>
+              <h3 className="text-2xl font-bold mb-2">{activeDialog.title}</h3>
+              <p className="text-slate-600 dark:text-slate-400 mb-6">{activeDialog.message}</p>
+              <button 
+                onClick={() => { NotificationService.markAsRead(activeDialog.id); setActiveDialog(null); refreshNotifications(); }} 
+                className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors"
+              >
+                Rozumiem
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
