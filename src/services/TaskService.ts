@@ -1,40 +1,58 @@
+import { db } from '../firebase';
+import { collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
+import { APP_CONFIG } from '../config';
 import type { Task } from '../types/Task';
 
-const STORAGE_KEY = 'manageme_tasks';
+const STORAGE_KEY = 'prismboard_tasks';
 
 export class TaskService {
-  static getAll(): Task[] {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  }
-
-  static getByStory(storyId: string): Task[] {
-    return this.getAll().filter(t => t.storyId === storyId);
-  }
-
-  static create(taskData: Omit<Task, 'id' | 'createdAt' | 'status'>): Task {
-    const tasks = this.getAll();
-    const newTask: Task = {
-      ...taskData,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-      status: 'todo'
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...tasks, newTask]));
-    return newTask;
-  }
-
-  static update(id: string, updatedData: Partial<Task>): void {
-    const tasks = this.getAll();
-    const index = tasks.findIndex(t => t.id === id);
-    if (index !== -1) {
-      tasks[index] = { ...tasks[index], ...updatedData };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  static async getByStory(storyId: string): Promise<Task[]> {
+    if (APP_CONFIG.storage === 'database') {
+      const q = query(collection(db, 'tasks'), where('storyId', '==', storyId));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Task));
+    } else {
+      const data = localStorage.getItem(STORAGE_KEY);
+      const all = data ? JSON.parse(data) : [];
+      return all.filter((t: Task) => t.storyId === storyId);
     }
   }
 
-  static delete(id: string): void {
-    const tasks = this.getAll();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.filter(t => t.id !== id)));
+  static async create(task: Omit<Task, 'id'>): Promise<Task> {
+    if (APP_CONFIG.storage === 'database') {
+      const docRef = await addDoc(collection(db, 'tasks'), task);
+      return { id: docRef.id, ...task } as Task;
+    } else {
+      const allData = localStorage.getItem(STORAGE_KEY);
+      const all = allData ? JSON.parse(allData) : [];
+      const newTask = { id: crypto.randomUUID(), ...task };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...all, newTask]));
+      return newTask as Task;
+    }
+  }
+
+  static async update(id: string, updates: Partial<Task>): Promise<void> {
+    if (APP_CONFIG.storage === 'database') {
+      await updateDoc(doc(db, 'tasks', id), updates);
+    } else {
+      const allData = localStorage.getItem(STORAGE_KEY);
+      const all = allData ? JSON.parse(allData) : [];
+      const index = all.findIndex((t: Task) => t.id === id);
+      if (index !== -1) {
+        all[index] = { ...all[index], ...updates };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+      }
+    }
+  }
+
+  static async delete(id: string): Promise<void> {
+    if (APP_CONFIG.storage === 'database') {
+      await deleteDoc(doc(db, 'tasks', id));
+    } else {
+      const allData = localStorage.getItem(STORAGE_KEY);
+      let all = allData ? JSON.parse(allData) : [];
+      all = all.filter((t: Task) => t.id !== id);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    }
   }
 }

@@ -1,12 +1,20 @@
+import { db } from '../firebase';
+import { collection, addDoc, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { APP_CONFIG } from '../config';
 import type { Project } from '../types/Project';
 
-const STORAGE_KEY = 'manageme_projects';
-const ACTIVE_KEY = 'manageme_active_project';
+const STORAGE_KEY = 'prismboard_projects';
+const ACTIVE_KEY = 'prismboard_active_project';
 
 export class ProjectService {
-  static getAll(): Project[] {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
+  static async getAll(): Promise<Project[]> {
+    if (APP_CONFIG.storage === 'database') {
+      const snapshot = await getDocs(collection(db, 'projects'));
+      return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Project));
+    } else {
+      const data = localStorage.getItem(STORAGE_KEY);
+      return data ? JSON.parse(data) : [];
+    }
   }
 
   static getActiveId(): string | null {
@@ -18,16 +26,25 @@ export class ProjectService {
     else localStorage.removeItem(ACTIVE_KEY);
   }
 
-  static create(name: string, description: string): Project {
-    const projects = this.getAll();
-    const newProject: Project = { id: crypto.randomUUID(), name, description };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...projects, newProject]));
-    return newProject;
+  static async create(name: string, description: string): Promise<Project> {
+    const project = { name, description };
+    if (APP_CONFIG.storage === 'database') {
+      const docRef = await addDoc(collection(db, 'projects'), project);
+      return { id: docRef.id, ...project };
+    } else {
+      const all = await this.getAll();
+      const newProject = { id: crypto.randomUUID(), ...project };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...all, newProject]));
+      return newProject;
+    }
   }
 
-  static delete(id: string): void {
-    const projects = this.getAll();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects.filter(p => p.id !== id)));
-    if (this.getActiveId() === id) this.setActive(null);
+  static async delete(id: string): Promise<void> {
+    if (APP_CONFIG.storage === 'database') {
+      await deleteDoc(doc(db, 'projects', id));
+    } else {
+      const all = await this.getAll();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all.filter(p => p.id !== id)));
+    }
   }
 }

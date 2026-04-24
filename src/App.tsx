@@ -1,4 +1,3 @@
-// src/App.tsx
 import { useState, useEffect } from 'react';
 import { ProjectService } from './services/ProjectService';
 import { UserService } from './services/UserService';
@@ -10,101 +9,115 @@ import type { Project } from './types/Project';
 import type { Story, StoryStatus, StoryPriority } from './types/Story';
 import type { Task, TaskPriority } from './types/Task';
 import type { Notification, NotificationPriority } from './types/Notification';
+import type { User, UserRole } from './types/User';
 
 function App() {
-  const user = UserService.getLoggedInUser();
-  const allUsers = UserService.getAllUsers();
-  
-  // Przełącznik Dark Mode
+  // --- SYSTEM AUTORYZACJI I ZARZĄDZANIA ---
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [currentView, setCurrentView] = useState<'board' | 'users'>('board');
+
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('theme') === 'dark' || 
       (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
 
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
+    const unsubscribe = UserService.listenToAuthChanges(async (user) => {
+      setCurrentUser(user);
+      if (user && user.role === 'admin') {
+        const users = await UserService.getAllUsers();
+        setAllUsers(users);
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const theme = darkMode ? 'dark' : 'light';
+    document.documentElement.classList.toggle('dark', darkMode);
+    localStorage.setItem('theme', theme);
   }, [darkMode]);
 
-  // STANY POWIADOMIEŃ
+  // --- STANY DANYCH KANBAN ---
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showAllNotifications, setShowAllNotifications] = useState(false);
   const [activeDialog, setActiveDialog] = useState<Notification | null>(null);
-
-  // Stany aplikacji
+  
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
-  
   const [activeStoryId, setActiveStoryId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
+  // Formularze
   const [projName, setProjName] = useState('');
   const [projDesc, setProjDesc] = useState('');
-
   const [storyName, setStoryName] = useState('');
   const [storyDesc, setStoryDesc] = useState('');
   const [storyPriority, setStoryPriority] = useState<StoryPriority>('medium');
-
   const [taskName, setTaskName] = useState('');
   const [taskDesc, setTaskDesc] = useState('');
   const [taskPriority, setTaskPriority] = useState<TaskPriority>('medium');
   const [taskTime, setTaskTime] = useState<number>(1);
 
-  // POMOCNICZA FUNKCJA DO POWIADOMIEŃ
-  const refreshNotifications = () => {
-    setNotifications(NotificationService.getForUser(user.id));
+  const loadNotifications = async () => {
+    if (currentUser) {
+      const data = await NotificationService.getAll(currentUser.id);
+      setNotifications(data);
+    }
   };
 
-  const sendNotification = (recipientId: string, title: string, msg: string, priority: NotificationPriority) => {
-    const note = NotificationService.create(recipientId, title, msg, priority);
-    if (recipientId === user.id) {
-      refreshNotifications();
-      if (priority === 'medium' || priority === 'high') {
-        setActiveDialog(note);
-      }
+  const sendNotification = async (recipientId: string, title: string, msg: string, priority: NotificationPriority) => {
+    const note = await NotificationService.create(recipientId, title, msg, priority);
+    if (currentUser && recipientId === currentUser.id) {
+      loadNotifications();
+      if (priority === 'medium' || priority === 'high') setActiveDialog(note);
     }
   };
 
   useEffect(() => {
-    setProjects(ProjectService.getAll());
-    setActiveProjectId(ProjectService.getActiveId());
-    refreshNotifications();
-  }, [user.id]);
+    if (currentUser && !currentUser.isBlocked && currentUser.role !== 'guest') {
+      ProjectService.getAll().then(setProjects);
+      setActiveProjectId(ProjectService.getActiveId());
+      loadNotifications();
+      UserService.getAllUsers().then(setAllUsers);
+    }
+  }, [currentUser]);
 
   useEffect(() => {
-    if (activeProjectId) setStories(StoryService.getByProject(activeProjectId));
+    if (activeProjectId) {
+      StoryService.getByProject(activeProjectId).then(setStories);
+    }
   }, [activeProjectId]);
 
   useEffect(() => {
-    if (activeStoryId) setTasks(TaskService.getByStory(activeStoryId));
+    if (activeStoryId) {
+      TaskService.getByStory(activeStoryId).then(setTasks);
+    }
   }, [activeStoryId]);
 
-  // Logika Aplikacji z Powiadomieniami
-  const handleAddProject = (e: React.FormEvent) => {
+  // --- OBSŁUGA PROJEKTÓW ---
+  const handleAddProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!projName.trim()) return;
-    ProjectService.create(projName, projDesc);
+    await ProjectService.create(projName, projDesc);
     
-    // POWIADOMIENIE: Nowy projekt (high) dla adminów
     allUsers.filter(u => u.role === 'admin').forEach(admin => {
       sendNotification(admin.id, 'Nowy Projekt', `Utworzono projekt: ${projName}`, 'high');
     });
 
     setProjName(''); setProjDesc('');
-    setProjects(ProjectService.getAll());
+    setProjects(await ProjectService.getAll());
   };
 
-  const handleDeleteProject = (e: React.MouseEvent, id: string) => {
+  const handleDeleteProject = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    ProjectService.delete(id);
-    setProjects(ProjectService.getAll());
+    await ProjectService.delete(id);
+    setProjects(await ProjectService.getAll());
   };
 
   const handleSelectProject = (id: string | null) => {
@@ -113,96 +126,100 @@ function App() {
     setActiveStoryId(null);
   };
 
-  const handleAddStory = (e: React.FormEvent) => {
+  // --- OBSŁUGA HISTORYJEK ---
+  const handleAddStory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!storyName.trim() || !activeProjectId) return;
-    StoryService.create({ name: storyName, description: storyDesc, priority: storyPriority, projectId: activeProjectId, status: 'todo', ownerId: user.id });
+    if (!storyName.trim() || !activeProjectId || !currentUser) return;
+    
+    await StoryService.create({ 
+      name: storyName, 
+      description: storyDesc, 
+      priority: storyPriority, 
+      projectId: activeProjectId, 
+      status: 'todo', 
+      ownerId: currentUser.id,
+      createdAt: new Date().toISOString() // <-- POPRAWKA: Dodano pole createdAt
+    });
+    
+    await sendNotification(currentUser.id, 'Nowa historyjka', `Pomyślnie dodano historyjkę: "${storyName}"`, 'medium');
+
     setStoryName(''); setStoryDesc('');
-    setStories(StoryService.getByProject(activeProjectId));
+    setStories(await StoryService.getByProject(activeProjectId));
   };
 
-  const updateStoryStatus = (id: string, status: StoryStatus) => {
-    StoryService.update(id, { status });
-    if (activeProjectId) setStories(StoryService.getByProject(activeProjectId));
+  const updateStoryStatus = async (id: string, status: StoryStatus) => {
+    await StoryService.update(id, { status });
+    if (activeProjectId) setStories(await StoryService.getByProject(activeProjectId));
   };
 
-  const handleAddTask = (e: React.FormEvent) => {
+  // --- OBSŁUGA ZADAŃ ---
+  const handleAddTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!taskName.trim() || !activeStoryId) return;
-    TaskService.create({ name: taskName, description: taskDesc, priority: taskPriority, estimatedTime: taskTime, storyId: activeStoryId });
     
-    // POWIADOMIENIE: Nowe zadanie (medium) dla właściciela
+    await TaskService.create({ 
+      name: taskName, 
+      description: taskDesc, 
+      priority: taskPriority, 
+      estimatedTime: taskTime, 
+      storyId: activeStoryId, 
+      status: 'todo' 
+    });
+    
     const story = stories.find(s => s.id === activeStoryId);
     if (story) {
       sendNotification(story.ownerId, 'Nowe zadanie', `Dodano zadanie "${taskName}" do historyjki ${story.name}`, 'medium');
     }
 
     setTaskName(''); setTaskDesc(''); setTaskTime(1);
-    setTasks(TaskService.getByStory(activeStoryId));
+    setTasks(await TaskService.getByStory(activeStoryId));
   };
 
-  const handleAssignUser = (taskId: string, userId: string) => {
-    TaskService.update(taskId, {
-      assignedUserId: userId,
-      status: 'doing',
-      startDate: new Date().toISOString()
-    });
-
+  const handleAssignUser = async (taskId: string, userId: string) => {
+    await TaskService.update(taskId, { assignedUserId: userId, status: 'doing', startDate: new Date().toISOString() });
+    
     const story = stories.find(s => s.id === activeStoryId);
     const task = tasks.find(t => t.id === taskId);
 
-    // POWIADOMIENIE: Przypisanie do zadania (high)
     sendNotification(userId, 'Zostałeś przypisany', `Przypisano Cię do zadania: ${task?.name}`, 'high');
     
-    // POWIADOMIENIE: Status zadania na doing (low)
     if (story) {
       sendNotification(story.ownerId, 'Zadanie w toku', `Zadanie "${task?.name}" ma status DOING`, 'low');
+      if (story.status === 'todo') {
+        await StoryService.update(story.id, { status: 'doing' });
+        setStories(await StoryService.getByProject(activeProjectId!));
+      }
     }
-
-    if (story && story.status === 'todo') {
-      StoryService.update(story.id, { status: 'doing' });
-      setStories(StoryService.getByProject(activeProjectId!));
-    }
-    setTasks(TaskService.getByStory(activeStoryId!));
+    setTasks(await TaskService.getByStory(activeStoryId!));
     setSelectedTask(null);
   };
 
-  const handleCompleteTask = (taskId: string) => {
-    TaskService.update(taskId, {
-      status: 'done',
-      endDate: new Date().toISOString()
-    });
-
+  const handleCompleteTask = async (taskId: string) => {
+    await TaskService.update(taskId, { status: 'done', endDate: new Date().toISOString() });
+    
     const story = stories.find(s => s.id === activeStoryId);
     const task = tasks.find(t => t.id === taskId);
     
-    // POWIADOMIENIE: Status zadania na done (medium)
-    if (story) {
-      sendNotification(story.ownerId, 'Zadanie ukończone', `Zadanie "${task?.name}" ma status DONE`, 'medium');
-    }
+    if (story) sendNotification(story.ownerId, 'Zadanie ukończone', `Zadanie "${task?.name}" ma status DONE`, 'medium');
 
-    const updatedTasks = TaskService.getByStory(activeStoryId!);
+    const updatedTasks = await TaskService.getByStory(activeStoryId!);
     setTasks(updatedTasks);
+    
     if (updatedTasks.every(t => t.status === 'done')) {
-      StoryService.update(activeStoryId!, { status: 'done' });
-      setStories(StoryService.getByProject(activeProjectId!));
+      await StoryService.update(activeStoryId!, { status: 'done' });
+      setStories(await StoryService.getByProject(activeProjectId!));
     }
     setSelectedTask(null);
   };
 
-  const handleDeleteTask = (taskId: string) => {
+  const handleDeleteTask = async (taskId: string) => {
     const task = tasks.find(t => t.id === taskId);
     const story = stories.find(s => s.id === activeStoryId);
     
     if (window.confirm(`Czy na pewno usunąć zadanie: ${task?.name}?`)) {
-      TaskService.delete(taskId);
-      
-      // POWIADOMIENIE: Usunięcie zadania (medium) dla właściciela
-      if (story) {
-        sendNotification(story.ownerId, 'Usunięto zadanie', `Zadanie "${task?.name}" zostało usunięte.`, 'medium');
-      }
-      
-      setTasks(TaskService.getByStory(activeStoryId!));
+      await TaskService.delete(taskId);
+      if (story) sendNotification(story.ownerId, 'Usunięto zadanie', `Zadanie "${task?.name}" zostało usunięte.`, 'medium');
+      setTasks(await TaskService.getByStory(activeStoryId!));
       setSelectedTask(null);
     }
   };
@@ -215,57 +232,136 @@ function App() {
     return Math.max(0, hours).toFixed(2);
   };
 
+  // --- ZARZĄDZANIE UŻYTKOWNIKAMI (ADMIN) ---
+  const handleUpdateUserRole = async (userId: string, newRole: UserRole) => {
+    await UserService.updateUser(userId, { role: newRole });
+    setAllUsers(await UserService.getAllUsers());
+  };
+
+  const handleToggleBlock = async (user: User) => {
+    await UserService.updateUser(user.id, { isBlocked: !user.isBlocked });
+    setAllUsers(await UserService.getAllUsers());
+  };
+
   const activeProject = projects.find(p => p.id === activeProjectId);
   const activeStory = stories.find(s => s.id === activeStoryId);
 
-  // Style wielokrotnego użytku (zamiast klas CSS)
   const inputClass = "w-full p-3 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 focus:ring-2 ring-blue-500 outline-none transition-all dark:text-white";
   const btnClass = "bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl transition-colors shadow-lg shadow-blue-500/30";
 
+  // --- WIDOKI DOSTĘPU ---
+  if (authLoading) return <div className="min-h-screen flex items-center justify-center dark:bg-slate-900 dark:text-white">Autoryzacja...</div>;
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
+        <h1 className="text-6xl font-black text-blue-600 mb-12 tracking-tight" style={{ fontFamily: 'Righteous, cursive' }}>PrismBoard</h1>
+        <button onClick={UserService.loginWithGoogle} className={btnClass}>Zaloguj przez Google</button>
+      </div>
+    );
+  }
+
+  if (currentUser.isBlocked) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 text-center p-4">
+        <div className="text-red-500 text-7xl mb-6">⛔</div>
+        <h2 className="text-3xl font-bold dark:text-white">Konto zablokowane</h2>
+        <p className="text-slate-500 mt-4 mb-8">Dostęp do Twojego konta został wstrzymany przez administratora.</p>
+        <button onClick={UserService.logout} className="text-blue-500 hover:underline font-bold">Wyloguj</button>
+      </div>
+    );
+  }
+
+  if (currentUser.role === 'guest') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 text-center p-4">
+        <div className="text-yellow-500 text-7xl mb-6">⏳</div>
+        <h2 className="text-3xl font-bold dark:text-white">Oczekiwanie na zatwierdzenie</h2>
+        <p className="text-slate-500 mt-4 mb-8 max-w-md">Twoje konto jest aktywne jako Gość. Poczekaj, aż administrator przypisze Ci odpowiednią rolę.</p>
+        <button onClick={UserService.logout} className="text-blue-500 hover:underline font-bold">Wyloguj</button>
+      </div>
+    );
+  }
+
+  // --- GŁÓWNY RENDER ---
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors duration-300 p-4 md:p-8 relative">
       <div className="max-w-6xl mx-auto">
-        
-        {/* HEADER */}
         <header className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4 border-b border-slate-200 dark:border-slate-800 pb-6">
-          <div>
-            <h1 className="text-4xl font-black text-blue-600 dark:text-blue-400 tracking-tight" style={{ fontFamily: 'Righteous, cursive' }}>
+          <div className="flex items-center gap-6">
+            <h1 onClick={() => setCurrentView('board')} className="text-4xl font-black text-blue-600 dark:text-blue-400 tracking-tight cursor-pointer" style={{ fontFamily: 'Righteous, cursive' }}>
               PrismBoard
             </h1>
+            {currentUser.role === 'admin' && (
+              <button onClick={() => setCurrentView('users')} className={`font-bold transition-colors ${currentView === 'users' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'}`}>
+                Użytkownicy
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-6">
-            
-            {/* IKONA POWIADOMIEŃ */}
-            <button 
-              onClick={() => setShowAllNotifications(true)}
-              className="relative p-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 rounded-xl hover:scale-105 transition-all text-xl"
-            >
+            <button onClick={() => setShowAllNotifications(true)} className="relative p-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 rounded-xl hover:scale-105 transition-all text-xl">
               🔔
-              {NotificationService.getUnreadCount(user.id) > 0 && (
+              {NotificationService.getUnreadCount(notifications) > 0 && (
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
-                  {NotificationService.getUnreadCount(user.id)}
+                  {NotificationService.getUnreadCount(notifications)}
                 </span>
               )}
             </button>
-
-            <button 
-              onClick={() => setDarkMode(!darkMode)}
-              className="p-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 rounded-xl hover:scale-105 transition-all text-xl"
-            >
+            <button onClick={() => setDarkMode(!darkMode)} className="p-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 rounded-xl hover:scale-105 transition-all text-xl">
               {darkMode ? '🌙' : '☀️'}
             </button>
-            <div className="text-right">
-              <p className="text-xs uppercase tracking-widest text-slate-400 font-bold">Zalogowany</p>
-              <p className="font-semibold">{user.firstName} {user.lastName}</p>
-              <span className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 px-2 py-0.5 rounded-full font-bold uppercase tracking-tighter">
-                {user.role}
-              </span>
+            <div className="text-right flex items-center gap-4">
+              <div>
+                <p className="font-semibold">{currentUser.firstName} {currentUser.lastName}</p>
+                <span className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 px-2 py-0.5 rounded-full font-bold uppercase tracking-tighter">
+                  {currentUser.role}
+                </span>
+              </div>
+              <button onClick={UserService.logout} className="text-sm text-red-500 hover:underline font-bold ml-2">Wyloguj</button>
             </div>
           </div>
         </header>
 
-        {/* WIDOK 1: LISTA PROJEKTÓW */}
-        {!activeProjectId ? (
+        {currentView === 'users' && currentUser.role === 'admin' ? (
+          <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+            <h2 className="text-2xl font-bold mb-6">Zarządzanie Użytkownikami</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-500">
+                    <th className="p-4">Użytkownik</th>
+                    <th className="p-4">Email</th>
+                    <th className="p-4">Rola</th>
+                    <th className="p-4">Akcje</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allUsers.map(u => (
+                    <tr key={u.id} className={`border-b border-slate-100 dark:border-slate-700/50 ${u.isBlocked ? 'opacity-50' : ''}`}>
+                      <td className="p-4 font-bold">{u.firstName} {u.lastName}</td>
+                      <td className="p-4">{u.email}</td>
+                      <td className="p-4">
+                        <select value={u.role} onChange={(e) => handleUpdateUserRole(u.id, e.target.value as UserRole)} className="bg-slate-100 dark:bg-slate-900 p-2 rounded-lg border-none text-sm outline-none cursor-pointer" disabled={u.id === currentUser.id}>
+                          <option value="guest">Guest</option>
+                          <option value="developer">Developer</option>
+                          <option value="devops">DevOps</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      </td>
+                      <td className="p-4">
+                        <button onClick={() => handleToggleBlock(u)} disabled={u.id === currentUser.id} className={`px-4 py-2 rounded-lg text-sm font-bold text-white ${u.isBlocked ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'} disabled:opacity-50 transition-colors`}>
+                          {u.isBlocked ? 'Odblokuj' : 'Zablokuj'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : 
+
+        !activeProjectId ? (
           <div className="grid lg:grid-cols-3 gap-8">
             <div className="lg:col-span-1">
               <div className="bg-white dark:bg-slate-800/50 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
@@ -282,7 +378,7 @@ function App() {
               <h2 className="text-2xl font-bold mb-6">Twoje Projekty</h2>
               <div className="grid sm:grid-cols-2 gap-4">
                 {projects.map(p => (
-                  <div key={p.id} className="group bg-white dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-blue-500 transition-all shadow-sm">
+                  <div key={p.id} className="group bg-white dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-blue-500 transition-all shadow-sm flex flex-col">
                     <h3 className="text-lg font-bold">{p.name}</h3>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 mb-6 line-clamp-2">{p.description}</p>
                     <div className="flex justify-between items-center mt-auto">
@@ -294,10 +390,7 @@ function App() {
               </div>
             </div>
           </div>
-        ) 
-        
-        /* WIDOK 2: KANBAN HISTORYJEK W PROJEKCIE */
-        : !activeStoryId ? (
+        ) : !activeStoryId ? (
           <div className="animate-fade-in">
             <button onClick={() => handleSelectProject(null)} className="mb-6 flex items-center gap-2 text-slate-500 hover:text-blue-500 font-bold transition-colors">
               ← Powrót do projektów
@@ -323,11 +416,8 @@ function App() {
                   <div className="space-y-3">
                     {stories.filter(s => s.status === status).map(story => (
                       <div key={story.id} className="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-                        <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-md ${story.priority === 'high' ? 'bg-red-100 text-red-600' : story.priority === 'medium' ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'}`}>
-                          {story.priority}
-                        </span>
+                        <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-md ${story.priority === 'high' ? 'bg-red-100 text-red-600' : story.priority === 'medium' ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'}`}>{story.priority}</span>
                         <h5 className="font-bold mt-2 text-lg">{story.name}</h5>
-                        
                         <div className="flex gap-2 mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
                           <button onClick={() => setActiveStoryId(story.id)} className="flex-1 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-bold py-2 rounded-lg hover:bg-blue-100 transition-colors">Zadania</button>
                           {status !== 'todo' && <button onClick={() => updateStoryStatus(story.id, 'todo')} className="flex-1 bg-slate-100 dark:bg-slate-700 text-xs font-bold py-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">Todo</button>}
@@ -341,10 +431,7 @@ function App() {
               ))}
             </div>
           </div>
-        ) 
-        
-        /* WIDOK 3: KANBAN ZADAŃ W HISTORYJCE */
-        : (
+        ) : (
           <div className="animate-fade-in">
             <button onClick={() => setActiveStoryId(null)} className="mb-6 flex items-center gap-2 text-slate-500 hover:text-blue-500 font-bold transition-colors">
               ← Powrót do historyjek
@@ -374,9 +461,7 @@ function App() {
                     {tasks.filter(t => t.status === status).map(task => (
                       <div key={task.id} onClick={() => setSelectedTask(task)} className="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-blue-500 hover:shadow-md transition-all">
                         <div className="flex justify-between items-center mb-2">
-                          <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-md ${task.priority === 'high' ? 'bg-red-100 text-red-600' : task.priority === 'medium' ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'}`}>
-                            {task.priority}
-                          </span>
+                          <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-md ${task.priority === 'high' ? 'bg-red-100 text-red-600' : task.priority === 'medium' ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'}`}>{task.priority}</span>
                           <span className="text-xs font-bold text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-md">{task.estimatedTime}h</span>
                         </div>
                         <strong className="block text-lg mb-2">{task.name}</strong>
@@ -391,7 +476,6 @@ function App() {
               ))}
             </div>
 
-            {/* MODAL: SZCZEGÓŁY ZADANIA I USUWANIE */}
             {selectedTask && (
               <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-50 p-4" onClick={() => setSelectedTask(null)}>
                 <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl w-full max-w-lg border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -419,25 +503,17 @@ function App() {
                   )}
 
                   {selectedTask.status === 'doing' && (
-                    <button onClick={() => handleCompleteTask(selectedTask.id)} className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors mb-4 shadow-lg shadow-green-500/30">
-                      Oznacz jako ZAKOŃCZONE
-                    </button>
+                    <button onClick={() => handleCompleteTask(selectedTask.id)} className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors mb-4 shadow-lg shadow-green-500/30">Oznacz jako ZAKOŃCZONE</button>
                   )}
 
-                  <button onClick={() => handleDeleteTask(selectedTask.id)} className="w-full bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-500/10 dark:hover:bg-red-500/20 font-bold py-3 rounded-xl transition-colors mb-4">
-                    Usuń zadanie
-                  </button>
-
-                  <button onClick={() => setSelectedTask(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">
-                    Zamknij widok
-                  </button>
+                  <button onClick={() => handleDeleteTask(selectedTask.id)} className="w-full bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-500/10 dark:hover:bg-red-500/20 font-bold py-3 rounded-xl transition-colors mb-4">Usuń zadanie</button>
+                  <button onClick={() => setSelectedTask(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">Zamknij widok</button>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* MODAL WSZYSTKICH POWIADOMIEŃ */}
         {showAllNotifications && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-50 p-4" onClick={() => setShowAllNotifications(false)}>
             <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl w-full max-w-lg border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -448,11 +524,7 @@ function App() {
               <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
                 {notifications.length === 0 ? <p className="text-slate-500 text-center py-4">Brak powiadomień</p> : 
                   notifications.map(n => (
-                    <div 
-                      key={n.id} 
-                      onClick={() => { NotificationService.markAsRead(n.id); setActiveDialog(n); refreshNotifications(); }} 
-                      className={`p-4 rounded-xl border cursor-pointer transition-colors ${n.isRead ? 'opacity-60 bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700' : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'}`}
-                    >
+                    <div key={n.id} onClick={async () => { await NotificationService.markAsRead(n.id); setActiveDialog(n); loadNotifications(); }} className={`p-4 rounded-xl border cursor-pointer transition-colors ${n.isRead ? 'opacity-60 bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700' : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'}`}>
                       <div className="flex justify-between items-start mb-1">
                         <h4 className="font-bold">{n.title}</h4>
                         <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${n.priority === 'high' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{n.priority}</span>
@@ -466,19 +538,13 @@ function App() {
           </div>
         )}
 
-        {/* DIALOG POJEDYNCZEGO POWIADOMIENIA (WYSKAKUJĄCE OKNO) */}
         {activeDialog && (
           <div className="fixed inset-0 flex items-center justify-center z-[60] p-4 bg-slate-900/60 backdrop-blur-sm">
             <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl max-w-sm w-full shadow-2xl border-t-8 border-blue-600">
               <span className="text-[10px] font-black uppercase text-blue-500 tracking-widest mb-2 block">{activeDialog.priority} Priority</span>
               <h3 className="text-2xl font-bold mb-2">{activeDialog.title}</h3>
               <p className="text-slate-600 dark:text-slate-400 mb-6">{activeDialog.message}</p>
-              <button 
-                onClick={() => { NotificationService.markAsRead(activeDialog.id); setActiveDialog(null); refreshNotifications(); }} 
-                className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors"
-              >
-                Rozumiem
-              </button>
+              <button onClick={async () => { await NotificationService.markAsRead(activeDialog.id); setActiveDialog(null); loadNotifications(); }} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors">Rozumiem</button>
             </div>
           </div>
         )}
