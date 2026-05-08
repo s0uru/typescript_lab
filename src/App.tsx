@@ -24,6 +24,23 @@ function App() {
   });
 
   useEffect(() => {
+    // --- NOWY KOD: TYLKO DLA TESTÓW E2E ---
+    if (localStorage.getItem('E2E_TEST_MODE') === 'true') {
+      const testUser: User = { 
+        id: 'test-admin', email: 'test@test.pl', 
+        firstName: 'Tester', lastName: 'E2E', 
+        role: 'admin', isBlocked: false 
+      };
+      setCurrentUser(testUser);
+      setAllUsers([
+        testUser, 
+        { ...testUser, id: 'test-dev', firstName: 'Dev', lastName: 'E2E', role: 'developer' }
+      ]);
+      setAuthLoading(false);
+      return;
+    }
+    // --------------------------------------
+
     const unsubscribe = UserService.listenToAuthChanges(async (user) => {
       setCurrentUser(user);
       if (user && user.role === 'admin') {
@@ -138,7 +155,7 @@ function App() {
       projectId: activeProjectId, 
       status: 'todo', 
       ownerId: currentUser.id,
-      createdAt: new Date().toISOString() // <-- POPRAWKA: Dodano pole createdAt
+      createdAt: new Date().toISOString()
     });
     
     await sendNotification(currentUser.id, 'Nowa historyjka', `Pomyślnie dodano historyjkę: "${storyName}"`, 'medium');
