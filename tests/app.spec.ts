@@ -14,8 +14,8 @@ test.describe('Zaliczenie - Pełny cykl CRUD PrismBoard', () => {
     await page.evaluate(() => { window.localStorage.setItem('E2E_TEST_MODE', 'true'); });
     await page.reload();
     
-    // Czekamy na załadowanie aplikacji
-    await expect(page.getByText('PrismBoard').first()).toBeVisible({ timeout: 10000 });
+    // Czekamy na załadowanie aplikacji (szukamy nagłówka na górze)
+    await expect(page.locator('h1').filter({ hasText: 'PrismBoard' })).toBeVisible({ timeout: 10000 });
   });
 
   test('Powinien wykonać pełny cykl: Tworzenie -> Edycja -> Zmiana Statusu -> Usuwanie', async ({ page }) => {
@@ -25,72 +25,81 @@ test.describe('Zaliczenie - Pełny cykl CRUD PrismBoard', () => {
     // ==========================================
     
     // Tworzenie Projektu
-    await page.getByPlaceholder('Nazwa projektu').first().fill(projectName);
-    await page.getByPlaceholder('Opis projektu').first().fill('Opis E2E');
-    await page.getByRole('button', { name: 'Utwórz projekt' }).first().click();
+    await page.getByPlaceholder('Nazwa projektu').fill(projectName);
+    await page.getByPlaceholder('Opis projektu').fill('Opis E2E');
+    await page.getByRole('button', { name: 'Utwórz projekt' }).click();
     await expect(page.getByText(projectName).first()).toBeVisible();
 
-    // Edycja Projektu (Zadanie: Edycja projektu)
-    await page.locator('div').filter({ hasText: projectName }).getByRole('button', { name: 'Edytuj' }).first().click();
-    await page.getByPlaceholder('Nazwa projektu').first().fill(`${projectName}_EDIT`);
-    await page.getByRole('button', { name: 'Zapisz edycję' }).first().click();
+    // Edycja Projektu
+    await page.locator('.group').filter({ hasText: projectName }).getByRole('button', { name: 'Edytuj' }).click();
+    await page.getByPlaceholder('Nazwa projektu').fill(`${projectName}_EDIT`);
+    await page.getByRole('button', { name: 'Zapisz', exact: true }).click();
     await expect(page.getByText(`${projectName}_EDIT`).first()).toBeVisible();
 
     // Otwarcie Projektu
-    await page.locator('div').filter({ hasText: `${projectName}_EDIT` }).getByRole('button', { name: 'Otwórz →' }).first().click();
+    await page.locator('.group').filter({ hasText: `${projectName}_EDIT` }).getByRole('button', { name: 'Otwórz →' }).click();
 
     // Tworzenie Historyjki
-    await page.getByPlaceholder('Nazwa historyjki').first().fill(storyName);
-    await page.getByRole('button', { name: 'Dodaj historyjkę' }).first().click();
+    await page.getByPlaceholder('Nazwa historyjki').fill(storyName);
+    await page.getByRole('button', { name: 'Dodaj historyjkę' }).click();
     await expect(page.getByText(storyName).first()).toBeVisible();
 
-    // Edycja Historyjki (Zadanie: Edycja historyjki)
-    await page.locator('div').filter({ hasText: storyName }).getByRole('button', { name: 'Edytuj' }).first().click();
-    await page.getByPlaceholder('Nazwa historyjki').first().fill(`${storyName}_EDIT`);
-    await page.getByRole('button', { name: 'Zapisz' }).first().click();
+    // Edycja Historyjki
+    await page.locator('.rounded-xl').filter({ hasText: storyName }).getByRole('button', { name: 'Edytuj' }).click();
+    await page.getByPlaceholder('Nazwa historyjki').fill(`${storyName}_EDIT`);
+    await page.getByRole('button', { name: 'Zapisz', exact: true }).click();
     await expect(page.getByText(`${storyName}_EDIT`).first()).toBeVisible();
 
     // Wejście w Zadania
-    await page.locator('div').filter({ hasText: `${storyName}_EDIT` }).getByRole('button', { name: 'Zadania' }).first().click();
+    await page.locator('.rounded-xl').filter({ hasText: `${storyName}_EDIT` }).getByRole('button', { name: 'Zadania' }).click();
 
     // Tworzenie Zadania
-    await page.getByPlaceholder('Nazwa zadania').first().fill(taskName);
-    await page.getByRole('button', { name: 'Dodaj Zadanie' }).first().click();
+    await page.getByPlaceholder('Nazwa zadania').fill(taskName);
+    await page.getByRole('button', { name: 'Dodaj Zadanie' }).click();
     await expect(page.getByText(taskName).first()).toBeVisible();
 
-    // Edycja Zadania (Zadanie: Edycja zadania)
-    await page.locator('div').filter({ hasText: taskName }).getByRole('button', { name: 'Edytuj' }).first().click();
-    await page.getByPlaceholder('Nazwa zadania').first().fill(`${taskName}_EDIT`);
-    await page.getByRole('button', { name: 'Zapisz edycję' }).first().click();
+    // Edycja Zadania (wymaga kliknięcia w zadanie, by otworzyć modal szczegółów)
+    await page.getByText(taskName).first().click();
+    await page.getByRole('button', { name: 'Edytuj zadanie' }).click();
+    // Modal edycji zadania jest teraz otwarty
+    await page.getByPlaceholder('Nazwa zadania').fill(`${taskName}_EDIT`);
+    await page.getByRole('button', { name: 'Zapisz', exact: true }).click();
     await expect(page.getByText(`${taskName}_EDIT`).first()).toBeVisible();
+
 
     // ==========================================
     // 2. ZMIANA STATUSU ZADANIA
     // ==========================================
+    
+    // Otwieramy zadanie ponownie
     await page.getByText(`${taskName}_EDIT`).first().click(); 
-    await page.getByRole('combobox').first().selectOption({ label: 'Dev E2E (developer)' });
-    await expect(page.getByRole('button', { name: 'Zakończ zadanie' }).first()).toBeVisible();
-    await page.getByRole('button', { name: 'Zakończ zadanie' }).first().click();
+    // Przypisanie użytkownika automatycznie przenosi do kolumny DOING i zamyka modal
+    await page.getByRole('combobox').selectOption({ label: 'Dev E2E (developer)' });
+    
+    // Modal po przypisaniu sam się zamknął. Otwieramy je jeszcze raz żeby kliknąć "Zakończ"
+    await page.getByText(`${taskName}_EDIT`).first().click();
+    await expect(page.getByRole('button', { name: 'Oznacz jako ZAKOŃCZONE' })).toBeVisible();
+    await page.getByRole('button', { name: 'Oznacz jako ZAKOŃCZONE' }).click();
+
 
     // ==========================================
     // 3. USUNIĘCIE (Zadanie, Historyjka, Projekt)
     // ==========================================
     
-    // Akceptujemy wszystkie wyskakujące okienka confirm()
-    page.on('dialog', dialog => dialog.accept());
-
-    // Usuwanie Zadania
-    await page.locator('div').filter({ hasText: `${taskName}_EDIT` }).getByRole('button', { name: 'Usuń' }).first().click();
+    // Zadanie po zakończeniu zamknęło modal. Otwieramy by je usunąć
+    await page.getByText(`${taskName}_EDIT`).first().click();
+    await page.getByRole('button', { name: 'Usuń zadanie' }).click();
+    // Sprawdzamy czy zniknęło
     await expect(page.getByText(`${taskName}_EDIT`).first()).not.toBeVisible();
 
     // Powrót do historyjek i usuwanie historyjki
-    await page.getByRole('button', { name: '← Powrót do historyjek' }).first().click();
-    await page.locator('div').filter({ hasText: `${storyName}_EDIT` }).getByRole('button', { name: 'Usuń' }).first().click();
+    await page.getByRole('button', { name: '← Powrót do historyjek' }).click();
+    await page.locator('.rounded-xl').filter({ hasText: `${storyName}_EDIT` }).getByRole('button', { name: 'Usuń' }).click();
     await expect(page.getByText(`${storyName}_EDIT`).first()).not.toBeVisible();
 
     // Powrót do projektów i usuwanie projektu
-    await page.getByRole('button', { name: '← Powrót do projektów' }).first().click();
-    await page.locator('div').filter({ hasText: `${projectName}_EDIT` }).getByRole('button', { name: 'Usuń' }).first().click();
+    await page.getByRole('button', { name: '← Powrót do projektów' }).click();
+    await page.locator('.group').filter({ hasText: `${projectName}_EDIT` }).getByRole('button', { name: 'Usuń' }).click();
     await expect(page.getByText(`${projectName}_EDIT`).first()).not.toBeVisible();
   });
 });

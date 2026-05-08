@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, updateDoc, doc, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
 import { APP_CONFIG } from '../config';
 import type { Story } from '../types/Story';
 
@@ -42,6 +42,17 @@ export class StoryService {
         all[index] = { ...all[index], ...updates };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
       }
+    }
+  }
+
+  static async delete(id: string): Promise<void> {
+    if (APP_CONFIG.storage === 'database') {
+      await deleteDoc(doc(db, 'stories', id));
+    } else {
+      const allData = localStorage.getItem(STORAGE_KEY);
+      let all = allData ? JSON.parse(allData) : [];
+      all = all.filter((s: Story) => s.id !== id);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
     }
   }
 }

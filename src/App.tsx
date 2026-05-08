@@ -24,7 +24,6 @@ function App() {
   });
 
   useEffect(() => {
-    // --- NOWY KOD: TYLKO DLA TESTÓW E2E ---
     if (localStorage.getItem('E2E_TEST_MODE') === 'true') {
       const testUser: User = { 
         id: 'test-admin', email: 'test@test.pl', 
@@ -39,7 +38,6 @@ function App() {
       setAuthLoading(false);
       return;
     }
-    // --------------------------------------
 
     const unsubscribe = UserService.listenToAuthChanges(async (user) => {
       setCurrentUser(user);
@@ -69,6 +67,11 @@ function App() {
   const [activeStoryId, setActiveStoryId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+
+  // Stany edycji
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [editingStory, setEditingStory] = useState<Story | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   // Formularze
   const [projName, setProjName] = useState('');
@@ -131,9 +134,28 @@ function App() {
     setProjects(await ProjectService.getAll());
   };
 
-  const handleDeleteProject = async (e: React.MouseEvent, id: string) => {
+  const handleEditProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProject || !editingProject.name.trim()) return;
+    
+    await ProjectService.update(editingProject.id, { name: editingProject.name, description: editingProject.description });
+    
+    allUsers.filter(u => u.role === 'admin').forEach(admin => {
+      sendNotification(admin.id, 'Projekt zaktualizowany', `Zaktualizowano projekt: ${editingProject.name}`, 'low');
+    });
+
+    setEditingProject(null);
+    setProjects(await ProjectService.getAll());
+  };
+
+  const handleDeleteProject = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
     await ProjectService.delete(id);
+    
+    allUsers.filter(u => u.role === 'admin').forEach(admin => {
+      sendNotification(admin.id, 'Usunięto Projekt', `Usunięto projekt: ${name}`, 'medium');
+    });
+    
     setProjects(await ProjectService.getAll());
   };
 
@@ -164,6 +186,36 @@ function App() {
     setStories(await StoryService.getByProject(activeProjectId));
   };
 
+  const handleEditStory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStory || !editingStory.name.trim() || !activeProjectId) return;
+    
+    await StoryService.update(editingStory.id, {
+      name: editingStory.name,
+      description: editingStory.description,
+      priority: editingStory.priority
+    });
+    
+    if (currentUser) {
+      await sendNotification(currentUser.id, 'Edycja historyjki', `Zaktualizowano historyjkę: "${editingStory.name}"`, 'low');
+    }
+
+    setEditingStory(null);
+    setStories(await StoryService.getByProject(activeProjectId));
+  };
+
+  const handleDeleteStory = async (e: React.MouseEvent, storyId: string, storyName: string) => {
+    e.stopPropagation();
+    await StoryService.delete(storyId);
+    
+    if (currentUser) {
+      sendNotification(currentUser.id, 'Usunięto historyjkę', `Historyjka "${storyName}" została usunięta.`, 'medium');
+    }
+    
+    if (activeProjectId) setStories(await StoryService.getByProject(activeProjectId));
+    if (activeStoryId === storyId) setActiveStoryId(null);
+  };
+
   const updateStoryStatus = async (id: string, status: StoryStatus) => {
     await StoryService.update(id, { status });
     if (activeProjectId) setStories(await StoryService.getByProject(activeProjectId));
@@ -189,6 +241,26 @@ function App() {
     }
 
     setTaskName(''); setTaskDesc(''); setTaskTime(1);
+    setTasks(await TaskService.getByStory(activeStoryId));
+  };
+
+  const handleEditTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask || !editingTask.name.trim() || !activeStoryId) return;
+
+    await TaskService.update(editingTask.id, {
+      name: editingTask.name,
+      description: editingTask.description,
+      priority: editingTask.priority,
+      estimatedTime: editingTask.estimatedTime
+    });
+
+    const story = stories.find(s => s.id === activeStoryId);
+    if (story) {
+      sendNotification(story.ownerId, 'Zaktualizowano zadanie', `Zmieniono zadanie "${editingTask.name}".`, 'low');
+    }
+
+    setEditingTask(null);
     setTasks(await TaskService.getByStory(activeStoryId));
   };
 
@@ -233,12 +305,11 @@ function App() {
     const task = tasks.find(t => t.id === taskId);
     const story = stories.find(s => s.id === activeStoryId);
     
-    if (window.confirm(`Czy na pewno usunąć zadanie: ${task?.name}?`)) {
-      await TaskService.delete(taskId);
-      if (story) sendNotification(story.ownerId, 'Usunięto zadanie', `Zadanie "${task?.name}" zostało usunięte.`, 'medium');
-      setTasks(await TaskService.getByStory(activeStoryId!));
-      setSelectedTask(null);
-    }
+    await TaskService.delete(taskId);
+    if (story) sendNotification(story.ownerId, 'Usunięto zadanie', `Zadanie "${task?.name}" zostało usunięte.`, 'medium');
+    
+    setTasks(await TaskService.getByStory(activeStoryId!));
+    setSelectedTask(null);
   };
 
   const calculateHours = (start?: string, end?: string) => {
@@ -398,9 +469,10 @@ function App() {
                   <div key={p.id} className="group bg-white dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-blue-500 transition-all shadow-sm flex flex-col">
                     <h3 className="text-lg font-bold">{p.name}</h3>
                     <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 mb-6 line-clamp-2">{p.description}</p>
-                    <div className="flex justify-between items-center mt-auto">
-                      <button onClick={(e) => handleDeleteProject(e, p.id)} className="text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 px-3 py-1 rounded-lg transition-colors text-sm font-bold">Usuń</button>
-                      <button onClick={() => handleSelectProject(p.id)} className="bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 px-4 py-2 rounded-lg font-bold hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-colors">Otwórz →</button>
+                    <div className="flex justify-between items-center mt-auto gap-2">
+                      <button onClick={(e) => { e.stopPropagation(); setEditingProject(p); }} className="text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 px-3 py-1 rounded-lg transition-colors text-sm font-bold">Edytuj</button>
+                      <button onClick={(e) => handleDeleteProject(e, p.id, p.name)} className="text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 px-3 py-1 rounded-lg transition-colors text-sm font-bold">Usuń</button>
+                      <button onClick={() => handleSelectProject(p.id)} className="bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 px-4 py-2 rounded-lg font-bold hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-colors ml-auto">Otwórz →</button>
                     </div>
                   </div>
                 ))}
@@ -440,6 +512,10 @@ function App() {
                           {status !== 'todo' && <button onClick={() => updateStoryStatus(story.id, 'todo')} className="flex-1 bg-slate-100 dark:bg-slate-700 text-xs font-bold py-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">Todo</button>}
                           {status !== 'doing' && <button onClick={() => updateStoryStatus(story.id, 'doing')} className="flex-1 bg-slate-100 dark:bg-slate-700 text-xs font-bold py-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">Doing</button>}
                           {status !== 'done' && <button onClick={() => updateStoryStatus(story.id, 'done')} className="flex-1 bg-slate-100 dark:bg-slate-700 text-xs font-bold py-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">Done</button>}
+                        </div>
+                        <div className="flex gap-2 mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 border-dashed">
+                          <button onClick={(e) => { e.stopPropagation(); setEditingStory(story); }} className="flex-1 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 text-xs font-bold py-1 transition-colors">Edytuj</button>
+                          <button onClick={(e) => handleDeleteStory(e, story.id, story.name)} className="flex-1 text-red-400 hover:text-red-600 text-xs font-bold py-1 transition-colors">Usuń</button>
                         </div>
                       </div>
                     ))}
@@ -523,13 +599,78 @@ function App() {
                     <button onClick={() => handleCompleteTask(selectedTask.id)} className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors mb-4 shadow-lg shadow-green-500/30">Oznacz jako ZAKOŃCZONE</button>
                   )}
 
-                  <button onClick={() => handleDeleteTask(selectedTask.id)} className="w-full bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-500/10 dark:hover:bg-red-500/20 font-bold py-3 rounded-xl transition-colors mb-4">Usuń zadanie</button>
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    <button onClick={() => { setEditingTask(selectedTask); setSelectedTask(null); }} className="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 font-bold py-3 rounded-xl transition-colors">Edytuj zadanie</button>
+                    <button onClick={() => handleDeleteTask(selectedTask.id)} className="w-full bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-500/10 dark:hover:bg-red-500/20 font-bold py-3 rounded-xl transition-colors">Usuń zadanie</button>
+                  </div>
+                  
                   <button onClick={() => setSelectedTask(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">Zamknij widok</button>
                 </div>
               </div>
             )}
           </div>
         )}
+
+        {/* --- MODALE DO EDYCJI --- */}
+
+        {editingProject && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-[70] p-4" onClick={() => setEditingProject(null)}>
+            <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl w-full max-w-lg border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
+              <h3 className="text-2xl font-bold mb-4">Edytuj Projekt</h3>
+              <form onSubmit={handleEditProject} className="space-y-4">
+                <input placeholder="Nazwa projektu" value={editingProject.name} onChange={e => setEditingProject({...editingProject, name: e.target.value})} className={inputClass} required />
+                <textarea placeholder="Opis projektu" value={editingProject.description} onChange={e => setEditingProject({...editingProject, description: e.target.value})} className={`${inputClass} min-h-[100px]`} />
+                <div className="flex gap-4 pt-4">
+                  <button type="button" onClick={() => setEditingProject(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">Anuluj</button>
+                  <button type="submit" className={`w-full ${btnClass}`}>Zapisz</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingStory && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-[70] p-4" onClick={() => setEditingStory(null)}>
+            <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl w-full max-w-lg border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
+              <h3 className="text-2xl font-bold mb-4">Edytuj Historyjkę</h3>
+              <form onSubmit={handleEditStory} className="space-y-4">
+                <input placeholder="Nazwa historyjki" value={editingStory.name} onChange={e => setEditingStory({...editingStory, name: e.target.value})} className={inputClass} required />
+                <textarea placeholder="Opis" value={editingStory.description} onChange={e => setEditingStory({...editingStory, description: e.target.value})} className={`${inputClass} min-h-[100px]`} />
+                <select value={editingStory.priority} onChange={e => setEditingStory({...editingStory, priority: e.target.value as StoryPriority})} className={inputClass}>
+                  <option value="low">Niski</option><option value="medium">Średni</option><option value="high">Wysoki</option>
+                </select>
+                <div className="flex gap-4 pt-4">
+                  <button type="button" onClick={() => setEditingStory(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">Anuluj</button>
+                  <button type="submit" className={`w-full ${btnClass}`}>Zapisz</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingTask && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-[70] p-4" onClick={() => setEditingTask(null)}>
+            <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl w-full max-w-lg border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
+              <h3 className="text-2xl font-bold mb-4">Edytuj Zadanie</h3>
+              <form onSubmit={handleEditTask} className="space-y-4">
+                <input placeholder="Nazwa zadania" value={editingTask.name} onChange={e => setEditingTask({...editingTask, name: e.target.value})} className={inputClass} required />
+                <textarea placeholder="Opis zadania" value={editingTask.description} onChange={e => setEditingTask({...editingTask, description: e.target.value})} className={`${inputClass} min-h-[100px]`} />
+                <div className="flex gap-4">
+                  <select value={editingTask.priority} onChange={e => setEditingTask({...editingTask, priority: e.target.value as TaskPriority})} className={`${inputClass} w-full`}>
+                    <option value="low">Niski</option><option value="medium">Średni</option><option value="high">Wysoki</option>
+                  </select>
+                  <input type="number" min="1" placeholder="Czas (h)" value={editingTask.estimatedTime} onChange={e => setEditingTask({...editingTask, estimatedTime: Number(e.target.value)})} className={`${inputClass} w-full`} />
+                </div>
+                <div className="flex gap-4 pt-4">
+                  <button type="button" onClick={() => setEditingTask(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">Anuluj</button>
+                  <button type="submit" className={`w-full ${btnClass}`}>Zapisz</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* --- POWIADOMIENIA --- */}
 
         {showAllNotifications && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-50 p-4" onClick={() => setShowAllNotifications(false)}>

@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { APP_CONFIG } from '../config';
 import type { Project } from '../types/Project';
 
@@ -36,6 +36,20 @@ export class ProjectService {
       const newProject = { id: crypto.randomUUID(), ...project };
       localStorage.setItem(STORAGE_KEY, JSON.stringify([...all, newProject]));
       return newProject;
+    }
+  }
+
+  static async update(id: string, updates: Partial<Project>): Promise<void> {
+    if (APP_CONFIG.storage === 'database') {
+      await updateDoc(doc(db, 'projects', id), updates);
+    } else {
+      const allData = localStorage.getItem(STORAGE_KEY);
+      const all = allData ? JSON.parse(allData) : [];
+      const index = all.findIndex((p: Project) => p.id === id);
+      if (index !== -1) {
+        all[index] = { ...all[index], ...updates };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+      }
     }
   }
 
